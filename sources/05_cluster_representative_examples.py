@@ -16,7 +16,7 @@ def shorten(text: str, limit: int = 260) -> str:
     clean = " ".join(str(text).split())
     if len(clean) <= limit:
         return clean
-    return clean[: limit - 1].rstrip() + "…"
+    return clean[: limit - 1].rstrip() + "..."
 
 
 def representative_examples(df: pd.DataFrame, embeddings: np.ndarray, examples_per_cluster: int) -> pd.DataFrame:
@@ -50,38 +50,8 @@ def representative_examples(df: pd.DataFrame, embeddings: np.ndarray, examples_p
     return pd.DataFrame(rows)
 
 
-def write_markdown(path: Path, examples: pd.DataFrame, summary: pd.DataFrame) -> None:
-    lines = ["# Репрезентативные примеры текстов по кластерам", ""]
-    lines.append(
-        "Примеры выбраны по близости эмбеддинга текста к центру соответствующего кластера. "
-        "Это позволяет проверить не отдельные случайные тексты, а типичное содержание каждой группы."
-    )
-    lines.append("")
-
-    summary_map = summary.set_index("cluster").to_dict(orient="index")
-    for cluster_id, group in examples.groupby("cluster", sort=True):
-        info = summary_map.get(cluster_id, {})
-        lines.append(f"## Кластер {cluster_id}. {info.get('cluster_name', '')}")
-        lines.append("")
-        lines.append(f"Ключевые слова: {info.get('cluster_keywords', '')}")
-        lines.append("")
-        lines.append(
-            f"Размер кластера: {info.get('count', '')} текстов; доля: {info.get('share', '')}; "
-            f"преобладающая тональность: {info.get('main_sentiment', '')}."
-        )
-        lines.append("")
-        lines.append("| Ранг | ID | Источник | Тональность | Фрагмент текста |")
-        lines.append("|---:|---:|---|---|---|")
-        for row in group.itertuples(index=False):
-            excerpt = str(row.text_excerpt).replace("|", "\\|")
-            lines.append(f"| {row.rank} | {row.id} | {row.src} | {row.sentiment} | {excerpt} |")
-        lines.append("")
-
-    path.write_text("\n".join(lines), encoding="utf-8")
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Select representative texts for each cluster")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--clustered", type=Path, default=DEFAULT_CLUSTERED)
     parser.add_argument("--embeddings", type=Path, default=DEFAULT_EMBEDDINGS)
     parser.add_argument("--examples-per-cluster", type=int, default=6)
@@ -95,17 +65,7 @@ def main() -> None:
         raise ValueError(f"Rows and embeddings mismatch: {len(df)} != {len(embeddings)}")
 
     examples = representative_examples(df, embeddings, args.examples_per_cluster)
-    summary = pd.read_csv(results_dir / f"{args.output_prefix}cluster_summary.csv", encoding="utf-8-sig")
-
-    csv_path = results_dir / f"{args.output_prefix}cluster_representative_examples.csv"
-    md_path = results_dir / f"{args.output_prefix}cluster_representative_examples.md"
-    examples.to_csv(csv_path, index=False, encoding="utf-8-sig")
-    write_markdown(md_path, examples, summary)
-
-    print("Representative examples saved")
-    print(f"Saved: {csv_path}")
-    print(f"Saved: {md_path}")
-    print(examples[["cluster", "rank", "id", "src", "sentiment", "cluster_name", "text_excerpt"]].to_string(index=False))
+    examples.to_csv(results_dir / f"{args.output_prefix}cluster_representative_examples.csv", index=False, encoding="utf-8-sig")
 
 
 if __name__ == "__main__":

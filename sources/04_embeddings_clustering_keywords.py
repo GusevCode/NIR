@@ -24,98 +24,14 @@ DEFAULT_SAMPLE_SIZE = 10000
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_K_VALUES = "5,7,10,12"
 RANDOM_STATE = 42
-
 RUSSIAN_STOPWORDS = {
-    "а",
-    "без",
-    "более",
-    "бы",
-    "был",
-    "была",
-    "были",
-    "было",
-    "быть",
-    "в",
-    "вам",
-    "вас",
-    "весь",
-    "во",
-    "вот",
-    "все",
-    "всего",
-    "всех",
-    "вы",
-    "где",
-    "да",
-    "даже",
-    "для",
-    "до",
-    "его",
-    "ее",
-    "если",
-    "есть",
-    "еще",
-    "же",
-    "за",
-    "и",
-    "из",
-    "или",
-    "им",
-    "их",
-    "к",
-    "как",
-    "ко",
-    "когда",
-    "кто",
-    "ли",
-    "либо",
-    "мне",
-    "может",
-    "мы",
-    "на",
-    "надо",
-    "наш",
-    "не",
-    "него",
-    "нее",
-    "нет",
-    "ни",
-    "них",
-    "но",
-    "ну",
-    "о",
-    "об",
-    "однако",
-    "он",
-    "она",
-    "они",
-    "оно",
-    "от",
-    "очень",
-    "по",
-    "под",
-    "при",
-    "с",
-    "со",
-    "так",
-    "также",
-    "такой",
-    "там",
-    "то",
-    "тоже",
-    "только",
-    "у",
-    "уже",
-    "хотя",
-    "чем",
-    "что",
-    "чтобы",
-    "это",
-    "этого",
-    "этой",
-    "этом",
-    "этот",
-    "я",
+    "а", "без", "более", "бы", "был", "была", "были", "было", "быть", "в", "вам", "вас", "весь",
+    "во", "вот", "все", "всего", "всех", "вы", "где", "да", "даже", "для", "до", "его", "ее",
+    "если", "есть", "еще", "же", "за", "и", "из", "или", "им", "их", "к", "как", "ко", "когда",
+    "кто", "ли", "либо", "мне", "может", "мы", "на", "надо", "наш", "не", "него", "нее", "нет",
+    "ни", "них", "но", "ну", "о", "об", "однако", "он", "она", "они", "оно", "от", "очень", "по",
+    "под", "при", "с", "со", "так", "также", "такой", "там", "то", "тоже", "только", "у", "уже",
+    "хотя", "чем", "что", "чтобы", "это", "этого", "этой", "этом", "этот", "я",
 }
 
 
@@ -134,9 +50,9 @@ def stratified_sample(df: pd.DataFrame, sample_size: int) -> pd.DataFrame:
         sampled = sampled.sample(n=sample_size, random_state=RANDOM_STATE)
     elif len(sampled) < sample_size:
         remaining = df.drop(index=sampled.index, errors="ignore")
-        if len(remaining) > 0:
-            extra = remaining.sample(n=min(sample_size - len(sampled), len(remaining)), random_state=RANDOM_STATE)
-            sampled = pd.concat([sampled, extra])
+        extra_n = min(sample_size - len(sampled), len(remaining))
+        if extra_n > 0:
+            sampled = pd.concat([sampled, remaining.sample(n=extra_n, random_state=RANDOM_STATE)])
     return sampled.sample(frac=1, random_state=RANDOM_STATE).reset_index(drop=True)
 
 
@@ -147,12 +63,7 @@ def parse_k_values(value: str) -> list[int]:
 def choose_cluster_count(embeddings: np.ndarray, k_values: list[int]) -> pd.DataFrame:
     rows = []
     for k in k_values:
-        model = MiniBatchKMeans(
-            n_clusters=k,
-            random_state=RANDOM_STATE,
-            batch_size=1024,
-            n_init=10,
-        )
+        model = MiniBatchKMeans(n_clusters=k, random_state=RANDOM_STATE, batch_size=1024, n_init=10)
         labels = model.fit_predict(embeddings)
         score = silhouette_score(
             embeddings,
@@ -171,7 +82,6 @@ def extract_cluster_keywords(df: pd.DataFrame, top_n: int) -> pd.DataFrame:
         .agg(cluster_text=("clean_text", lambda values: " ".join(values.astype(str))))
         .sort_values("cluster")
     )
-
     vectorizer = TfidfVectorizer(
         lowercase=True,
         stop_words=list(RUSSIAN_STOPWORDS),
@@ -182,7 +92,6 @@ def extract_cluster_keywords(df: pd.DataFrame, top_n: int) -> pd.DataFrame:
     )
     matrix = vectorizer.fit_transform(cluster_docs["cluster_text"])
     terms = np.array(vectorizer.get_feature_names_out())
-
     rows = []
     for row_idx, cluster_id in enumerate(cluster_docs["cluster"]):
         values = matrix[row_idx].toarray().ravel()
@@ -197,60 +106,6 @@ def make_cluster_name(keywords: str) -> str:
     if not first_terms:
         return "Кластер без выраженных ключевых слов"
     return " / ".join(first_terms)
-
-
-def write_report(
-    path: Path,
-    model_name: str,
-    input_rows: int,
-    analyzed_rows: int,
-    selected_k: int,
-    k_table: pd.DataFrame,
-    cluster_summary: pd.DataFrame,
-) -> None:
-    k_lines = "\n".join(
-        f"| {row.k} | {row.silhouette:.4f} | {row.inertia:.2f} |"
-        for row in k_table.sort_values("k").itertuples(index=False)
-    )
-
-    cluster_lines = "\n".join(
-        f"| {row.cluster} | {row.count} | {row.share} | {row.main_sentiment} | {row.cluster_name} | {row.cluster_keywords} |"
-        for row in cluster_summary.itertuples(index=False)
-    )
-
-    text = f"""# Отчет по шагу 3: эмбеддинги, кластеризация и ключевые слова
-
-## Используемая модель эмбеддингов
-
-`{model_name}`
-
-Модель преобразует очищенный текст в числовой вектор. Далее векторы используются для группировки текстов по близости.
-
-## Параметры запуска
-
-| Параметр | Значение |
-|---|---:|
-| Количество строк во входной таблице | {input_rows} |
-| Количество анализируемых текстов | {analyzed_rows} |
-| Выбранное количество кластеров | {selected_k} |
-
-## Сравнение числа кластеров
-
-| k | Силуэтный коэффициент | Инерция MiniBatchKMeans |
-|---:|---:|---:|
-{k_lines}
-
-## Сводка по кластерам
-
-| Кластер | Количество текстов | Доля | Преобладающая тональность | Рабочее название | Ключевые слова |
-|---:|---:|---:|---|---|---|
-{cluster_lines}
-
-## Методический комментарий
-
-На данном этапе тексты были представлены в виде эмбеддингов, после чего применен алгоритм MiniBatchKMeans. Количество кластеров выбрано по максимальному силуэтному коэффициенту из проверенных значений. Ключевые слова рассчитаны через TF-IDF по объединенным текстам каждого кластера и используются для первичной интерпретации смысловых групп.
-"""
-    path.write_text(text, encoding="utf-8")
 
 
 def make_charts(df: pd.DataFrame, cluster_summary: pd.DataFrame, output_prefix: str) -> None:
@@ -274,8 +129,7 @@ def make_charts(df: pd.DataFrame, cluster_summary: pd.DataFrame, output_prefix: 
     for sentiment in sentiment_order:
         if sentiment not in crosstab.columns:
             crosstab[sentiment] = 0
-    crosstab = crosstab[sentiment_order]
-    shares = crosstab.div(crosstab.sum(axis=1), axis=0) * 100
+    shares = crosstab[sentiment_order].div(crosstab[sentiment_order].sum(axis=1), axis=0) * 100
 
     fig, ax = plt.subplots(figsize=(10, 5))
     left = np.zeros(len(shares))
@@ -296,7 +150,7 @@ def make_charts(df: pd.DataFrame, cluster_summary: pd.DataFrame, output_prefix: 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build embeddings, clusters and keywords")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL)
     parser.add_argument("--sample-size", type=int, default=DEFAULT_SAMPLE_SIZE)
@@ -312,8 +166,7 @@ def main() -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
 
     usecols = ["id", "src", "clean_text", "sentiment", "sentiment_score"]
-    source_df = pd.read_csv(args.input, usecols=usecols, encoding="utf-8-sig")
-    source_df = source_df.dropna(subset=["clean_text"]).copy()
+    source_df = pd.read_csv(args.input, usecols=usecols, encoding="utf-8-sig").dropna(subset=["clean_text"]).copy()
     df = stratified_sample(source_df, args.sample_size)
     df["clean_text"] = df["clean_text"].astype(str)
 
@@ -327,20 +180,12 @@ def main() -> None:
     embeddings = np.asarray(embeddings, dtype=np.float32)
     np.save(data_dir / f"{args.output_prefix}embeddings.npy", embeddings)
 
-    k_values = parse_k_values(args.k_values)
-    k_table = choose_cluster_count(embeddings, k_values)
+    k_table = choose_cluster_count(embeddings, parse_k_values(args.k_values))
     selected_k = int(k_table.iloc[0]["k"])
-
-    cluster_model = MiniBatchKMeans(
-        n_clusters=selected_k,
-        random_state=RANDOM_STATE,
-        batch_size=1024,
-        n_init=20,
-    )
+    cluster_model = MiniBatchKMeans(n_clusters=selected_k, random_state=RANDOM_STATE, batch_size=1024, n_init=20)
     df["cluster"] = cluster_model.fit_predict(embeddings)
 
     keywords = extract_cluster_keywords(df, args.top_keywords)
-
     sentiment_by_cluster = pd.crosstab(df["cluster"], df["sentiment"])
     main_sentiment = sentiment_by_cluster.idxmax(axis=1).rename("main_sentiment").reset_index()
     cluster_summary = (
@@ -352,46 +197,17 @@ def main() -> None:
     )
     cluster_summary["share"] = cluster_summary["count"].map(lambda value: f"{value / len(df) * 100:.2f}%")
     cluster_summary["cluster_name"] = cluster_summary["cluster_keywords"].fillna("").map(make_cluster_name)
-    cluster_summary = cluster_summary[
-        ["cluster", "count", "share", "main_sentiment", "cluster_name", "cluster_keywords"]
-    ]
-
+    cluster_summary = cluster_summary[["cluster", "count", "share", "main_sentiment", "cluster_name", "cluster_keywords"]]
     df = df.merge(cluster_summary[["cluster", "cluster_name", "cluster_keywords"]], on="cluster", how="left")
 
-    pca = PCA(n_components=2, random_state=RANDOM_STATE)
-    coords = pca.fit_transform(embeddings)
+    coords = PCA(n_components=2, random_state=RANDOM_STATE).fit_transform(embeddings)
     df["x_pca"] = coords[:, 0]
     df["y_pca"] = coords[:, 1]
 
-    result_path = results_dir / f"{args.output_prefix}clustered_texts.csv"
-    summary_path = results_dir / f"{args.output_prefix}cluster_summary.csv"
-    k_path = results_dir / f"{args.output_prefix}cluster_k_selection.csv"
-    report_path = results_dir / f"{args.output_prefix}step3_clustering_report.md"
-
-    df.to_csv(result_path, index=False, encoding="utf-8-sig")
-    cluster_summary.to_csv(summary_path, index=False, encoding="utf-8-sig")
-    k_table.sort_values("k").to_csv(k_path, index=False, encoding="utf-8-sig")
-
-    write_report(
-        report_path,
-        model_name=args.model,
-        input_rows=len(source_df),
-        analyzed_rows=len(df),
-        selected_k=selected_k,
-        k_table=k_table,
-        cluster_summary=cluster_summary,
-    )
+    df.to_csv(results_dir / f"{args.output_prefix}clustered_texts.csv", index=False, encoding="utf-8-sig")
+    cluster_summary.to_csv(results_dir / f"{args.output_prefix}cluster_summary.csv", index=False, encoding="utf-8-sig")
+    k_table.sort_values("k").to_csv(results_dir / f"{args.output_prefix}cluster_k_selection.csv", index=False, encoding="utf-8-sig")
     make_charts(df, cluster_summary, args.output_prefix)
-
-    print("Step 3 completed")
-    print(f"Model: {args.model}")
-    print(f"Input rows: {len(source_df)}")
-    print(f"Analyzed rows: {len(df)}")
-    print(f"Selected k: {selected_k}")
-    print(f"Saved: {result_path}")
-    print(f"Saved: {summary_path}")
-    print(f"Saved: {report_path}")
-    print(cluster_summary.to_string(index=False))
 
 
 if __name__ == "__main__":
